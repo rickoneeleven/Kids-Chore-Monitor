@@ -1,0 +1,168 @@
+# Project: Kids Chore Monitor
+
+**Objective:** Create an automated Python application to monitor Todoist task completion for "Daniel" and "Sophie" in their specific sections within a "Kids Chores" project. Based on completion status relative to a daily cutoff time, the application enables/disables corresponding Sophos Firewall rules.
+
+**Project Structure:**
+
+kids-chore-monitor/ ├── .venv/                  # Virtual environment ├── .env                    # <-- Add to .gitignore! Holds secrets ├── .env.example            # Example environment variables ├── .gitignore              # Git ignore file ├── requirements.txt        # Python dependencies │ ├── config.py               # Loads and validates configuration from .env ├── todoist_client.py       # Handles ALL Todoist API interactions ├── sophos_client.py        # Handles ALL Sophos Firewall API interactions ├── state_manager.py        # Manages the daily completion JSON state file ├── main.py                 # Main script logic, orchestration, time checks, logging setup └── chore_monitor.log       # Application log file
+
+-- you need to define all variables in .env
+
+5.  **Logging Setup (`main.py`):**
+
+    *   Configure the standard `logging` module at the start of `main.py`.
+
+    *   Set up logging to file (`config.LOG_FILE_PATH`) and potentially console.
+
+    *   Define a clear log format (e.g., timestamp, level, module, message).
+
+    *   Log script start/end.
+
+
+
+**Phase 1: Todoist Integration (`todoist_client.py`)**
+
+1.  **Initialization:** Function or class method to initialize `TodoistAPI` using the key from `config`.
+
+2.  **Core Function `are_child_tasks_incomplete(api, section_id)`:**
+
+    *   **Purpose:** Check if *any* active tasks assigned to the child (via `section_id`) are due today or overdue.
+
+    *   **Implementation:**
+
+        *   Construct Todoist `filter`: `"section_id: {section_id} & (today | overdue)"`.
+
+        *   Use `api.get_tasks(filter=...)`.
+
+        *   **Error Handling:** Wrap the API call in a `try...except` block. Implement a retry loop (e.g., 3 retries with 5, 15, 30-second backoff using `time.sleep`) for potential `TodoistAPIError` or connection issues.
+
+        *   If retries fail, log a persistent error and return a specific indicator (e.g., raise a custom exception `TodoistError` or return `None`).
+
+        *   **Result:** Return `True` if the `get_tasks` call returns a non-empty list (meaning incomplete tasks exist matching the criteria). Return `False` if the list is empty.
+
+    *   **Logging:** Log the filter used, the number of incomplete tasks found (or 0), and any retry attempts/errors.
+
+**Phase 2: Sophos Integration (`sophos_client.py`)**
+
+1.  **Initialization:** Function `initialize_sophos_client(host, user, password)` to create and return an authenticated client instance using `sophosfirewall-python`. Handle connection errors.
+
+2.  **Function `get_rule_status(client, rule_name)`:**
+
+    *   Use the Sophos library to find the rule by `rule_name`.
+
+    *   Return its status as a boolean (`True` for enabled, `False` for disabled).
+
+    *   Handle errors (rule not found, API error) and log them. Return `None` or raise `SophosError` on failure.
+
+3.  **Function `set_rule_status(client, rule_name, enable: bool)`:**
+
+    *   Use the Sophos library to find the rule by `rule_name` and update its status based on the `enable` parameter.
+
+    *   **Idempotency Check (Crucial):** Before attempting to *set* the status, call `get_rule_status`. If the rule is already in the desired state, log this and return `True` immediately without making the update call.
+
+    *   Handle errors (rule not found, update failed, API error) and log them. Return `True` on success (or if no change needed), `False` on failure.
+
+**Phase 3: State Management (`state_manager.py`)**
+
+1.  **File Path:** Use `config.STATE_FILE_PATH`.
+
+2.  **State Structure:** `{"daniel": {"completion_date": "YYYY-MM-DD"}, "sophie": {"completion_date": "YYYY-MM-DD"}}`
+
+3.  **Function `load_state(filepath)`:**
+
+    *   Reads JSON from `filepath`.
+
+    *   Handles `FileNotFoundError` (return empty dict `{}`) and `json.JSONDecodeError` (log error, return empty dict).
+
+4.  **Function `save_state(filepath, state_data)`:**
+
+    *   Writes `state_data` dictionary to `filepath` as JSON.
+
+    *   Handles `IOError` and logs success/failure.
+
+5.  **Function `check_if_done_today(state_data, child_name, today_date_str)`:**
+
+    *   Checks if `state_data.get(child_name, {}).get('completion_date') == today_date_str`.
+
+    *   Returns `True` or `False`.
+
+6.  **Function `mark_done_today(state_data, child_name, today_date_str)`:**
+
+    *   Updates the `state_data` dictionary in place: `state_data.setdefault(child_name, {})['completion_date'] = today_date_str`.
+
+    *   (Saving happens separately via `save_state` in `main.py`).
+
+**Phase 4: Core Logic & Integration (`main.py`)**
+
+1.  **Setup:** Initialize logging, load config, initialize Todoist API client, initialize Sophos client, load state.
+
+2.  **Time Check:**
+
+    *   Get current time using `datetime.now(pytz.timezone(config.TIMEZONE))`.
+
+    *   Compare `current_time.hour` with `config.CUTOFF_HOUR`.
+
+3.  **Child Loop:** Define children data (e.g., `CHILDREN = {'daniel': {'section_id': config.TODOIST_DANIEL_SECTION_ID, 'rule_name': config.SOPHOS_DANIEL_RULE_NAME}, 'sophie': ...}`). Iterate through this.
+
+4.  **Logic Flow:**
+
+    *   **If BEFORE Cutoff:**
+
+        *   For each child:
+
+            *   Call `sophos_client.set_rule_status(client, child['rule_name'], enable=False)`.
+
+            *   Log action (including if no change was needed due to idempotency).
+
+    *   **If AFTER Cutoff:**
+
+        *   Get `today_str = current_time.strftime('%Y-%m-%d')`.
+
+        *   For each child:
+
+            *   `log.info(f"Processing {child_name}...")`
+
+            *   **Check State:** `if state_manager.check_if_done_today(state, child_name, today_str): log.info("Already completed today, skipping."); continue`
+
+            *   **Check Todoist:**
+
+                *   `try: tasks_incomplete = todoist_client.are_child_tasks_incomplete(api, child['section_id'])`
+
+                *   `except TodoistError as e: log.error(f"Persistent Todoist error for {child_name}: {e}. Ensuring rule is disabled."); sophos_client.set_rule_status(client, child['rule_name'], enable=False); continue`
+
+                *   `log.info(f"Todoist check: Tasks incomplete = {tasks_incomplete}")`
+
+            *   **Determine Target Rule State:** `target_enabled = tasks_incomplete`
+
+            *   **Apply Sophos Change:**
+
+                *   `success = sophos_client.set_rule_status(client, child['rule_name'], enable=target_enabled)`
+
+                *   Log result (e.g., "Enabled rule", "Disabled rule", "No change needed").
+
+            *   **Update State (if completed):** `if not tasks_incomplete and success: state_manager.mark_done_today(state, child_name, today_str); log.info("Marked as done for today.")`
+
+5.  **Save State:** After the loop (if run after cutoff), call `state_manager.save_state(config.STATE_FILE_PATH, state)`.
+
+6.  **Final Logging:** Log script end.
+
+**Phase 5: Error Handling & Polish**
+
+1.  **Review Logging:** Ensure logs are detailed, clear, and capture all critical paths, decisions, and errors as per the principles. Include child names in logs.
+
+2.  **Review Error Handling:** Verify `try/except` blocks cover all I/O and API calls. Confirm Todoist retry logic and the "fail-open" (disable rule) fallback are correctly implemented. Ensure Sophos errors are logged but don't crash the script unnecessarily.
+
+3.  **Refinement:** Minor code cleanup, ensure consistency.
+
+**Phase 6: Deployment & Scheduling**
+
+1.  **Environment:** Prepare the execution environment (e.g., server, Raspberry Pi). Ensure Python, dependencies, and `.env` file are correctly set up.
+
+2.  **Permissions:** Ensure the script has read/write permissions for the log file and the state JSON file.
+
+3.  **Scheduling:** Use `cron` (Linux/macOS) or Task Scheduler (Windows) to run the `main.py` script.
+
+    *   **Schedule:** Every 5 minutes (`*/5 * * * * /path/to/.venv/bin/python /path/to/kids-chore-monitor/main.py >> /path/to/cron.log 2>&1`). Redirecting output is recommended for cron troubleshooting.
+
+    *   Ensure the cron job runs with the correct environment variables set (either via `.env` being loaded by the script or defined in the cron environment).
+
