@@ -1,0 +1,15 @@
+# Core dependencies for Kids Chore Monitor
+
+# Todoist API interaction
+todoist-api-python
+
+# Sophos Firewall API interaction
+# Note: Check PyPI or the library's source for the exact name if needed.
+# Assuming 'sophosfirewall-python' is correct based on the plan.
+sophosfirewall-python
+
+# Loading configuration from .env files
+python-dotenv
+
+# Timezone handling
+pytz
