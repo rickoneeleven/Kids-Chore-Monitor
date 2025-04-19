@@ -110,7 +110,7 @@ class TodoistClient:
 
         Fetches tasks for the given section (handling pagination), filters them for active
         tasks due on or before the current date in the configured timezone. Implements retry
-        logic for API calls.
+        logic for API calls. Logs the number of relevant incomplete tasks found.
 
         Args:
             section_id: The ID of the Todoist section to check.
@@ -142,36 +142,30 @@ class TodoistClient:
                 logger.debug("Attempt %d/%d: Fetching tasks from Todoist API for section %s...",
                              attempt + 1, MAX_RETRIES, section_id)
 
-                # *** FIX: Correctly handle the ResultsPaginator object ***
                 tasks_paginator = self._api.get_tasks(section_id=section_id)
                 collected_tasks = []
-
-                # Iterate through the paginator to collect all task objects
-                # Paginators often yield pages (lists of items).
                 if tasks_paginator:
-                    for page in tasks_paginator: # Assuming it yields lists (pages)
+                    for page in tasks_paginator:
                         if isinstance(page, list):
                             collected_tasks.extend(page)
                         else:
-                             # Log if the paginator yields something unexpected (e.g., single task)
-                             # Adjust logic here if the library's paginator behaves differently
                              logger.warning("Paginator yielded non-list item type: %s. Attempting to process as single task.", type(page))
-                             if hasattr(page, 'id') and hasattr(page, 'content'): # Basic check for task-like object
+                             if hasattr(page, 'id') and hasattr(page, 'content'):
                                  collected_tasks.append(page)
 
-                # Now use the collected list
-                logger.info("Attempt %d/%d: Successfully fetched %d tasks for section %s after processing paginator.",
+                logger.info("Attempt %d/%d: Successfully fetched %d total tasks for section %s after processing paginator.",
                             attempt + 1, MAX_RETRIES, len(collected_tasks), section_id)
 
-                # Filter the collected list for incomplete tasks due today or overdue
-                for task in collected_tasks: # Iterate over the fully collected list
+                # --- Count relevant incomplete tasks ---
+                incomplete_task_count = 0
+                first_incomplete_task_details = "" # Store details of the first one found for logging
+
+                for task in collected_tasks:
                     if task.is_completed:
                         continue
 
-                    # Check if the task has a due date
                     if task.due and task.due.date:
                         try:
-                            # Ensure task.due.date is a date object before comparison
                             if isinstance(task.due.date, datetime.date):
                                 due_date = task.due.date
                             elif isinstance(task.due.date, str):
@@ -182,12 +176,13 @@ class TodoistClient:
                                              type(task.due.date), task.id)
                                 continue
 
-                            # Compare date objects directly (Bugfix from previous step)
                             if due_date <= today:
-                                logger.warning("Found incomplete task due on or before today in section %s: "
-                                             "Task ID=%s, Name='%s', Due=%s",
-                                             section_id, task.id, task.content, task.due.string)
-                                return True # Found relevant incomplete task
+                                # Found a relevant incomplete task
+                                incomplete_task_count += 1
+                                if not first_incomplete_task_details: # Log details of the first one found
+                                     first_incomplete_task_details = (f"Example: Task ID={task.id}, "
+                                                                      f"Name='{task.content}', Due='{task.due.string}'")
+                                # No need to return early, count them all first
 
                         except ValueError as e_parse:
                             logger.error("Could not parse due date string '%s' for task ID %s in section %s during fallback: %s. Skipping check for this task.",
@@ -198,10 +193,15 @@ class TodoistClient:
                                           task.id, section_id, e_date, exc_info=True)
                              continue
 
-                # If loop completes without finding relevant incomplete tasks
-                logger.info("Attempt %d/%d: No incomplete tasks due on or before today found in section %s.",
-                            attempt + 1, MAX_RETRIES, section_id)
-                return False # Success, no relevant incomplete tasks found
+                # --- Log result and return ---
+                if incomplete_task_count > 0:
+                    logger.warning("Found %d incomplete task(s) due on or before today in section %s. %s",
+                                   incomplete_task_count, section_id, first_incomplete_task_details)
+                    return True # Found relevant incomplete task(s)
+                else:
+                    logger.info("Attempt %d/%d: No incomplete tasks due on or before today found in section %s.",
+                                attempt + 1, MAX_RETRIES, section_id)
+                    return False # Success, no relevant incomplete tasks found
 
             # --- Error Handling within Retry Loop ---
             except BASE_API_EXCEPTION as e:
@@ -216,7 +216,6 @@ class TodoistClient:
                     logger.info("Retrying after %d seconds...", RETRY_DELAY_SECONDS)
                     time.sleep(RETRY_DELAY_SECONDS)
             except Exception as e:
-                 # Catch other unexpected errors during processing (e.g., iterating paginator, date handling)
                  error_type = type(e).__name__
                  logger.exception("Attempt %d/%d: Unexpected error (%s) processing tasks for section %s.",
                                 attempt + 1, MAX_RETRIES, error_type, section_id, exc_info=True)
