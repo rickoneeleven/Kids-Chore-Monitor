@@ -1,26 +1,5 @@
 Project Overview: Develop an automated Python application, "Kids Chore Monitor," to integrate Todoist task management with Sophos Firewall control. The application will monitor chore completion status for specific children (Daniel, Sophie) within designated Todoist sections. Based on whether their tasks are completed by a configurable daily cutoff time, the system will automatically enable or disable their respective internet access rules managed by the Sophos Firewall. The application relies on API interactions with both Todoist and Sophos, manages daily completion state via a JSON file, and utilizes configuration settings loaded from an .env file. Robust logging is essential for monitoring and troubleshooting.
 
-- Phase 3: State Management (state_manager.py) - Implement the `StateManager` class:
-    - Define custom exceptions (e.g., `StateManagerError`, `StateFileError`).
-    - Define the expected JSON structure for the state file (e.g., `{"daniel": "YYYY-MM-DD", "sophie": "YYYY-MM-DD"}`).
-    - Constructor (`__init__`): Accepts the state file path (`config.STATE_FILE_PATH`). Initializes an empty dictionary to hold the state in memory.
-    - `load_state()`: Reads the JSON state file. Handles `FileNotFoundError` (logs info, returns default empty state `{}`) and JSON decoding errors (logs error, returns empty state). Stores the loaded or default state in the instance's state dictionary.
-    - `save_state()`: Writes the current in-memory state dictionary to the JSON file. Handles `IOError` or other file writing errors (logs error). Ensures pretty-printing for readability if desired.
-    - `check_if_done_today(child_name: str, today_str: str) -> bool`: Checks the in-memory state dictionary. Returns `True` if `state.get(child_name.lower()) == today_str`, otherwise `False`. Handles case-insensitivity for `child_name`.
-    - `mark_done_today(child_name: str, today_str: str)`: Updates the in-memory state dictionary: `state[child_name.lower()] = today_str`. (Note: This only updates the memory; `save_state` must be called separately to persist).
-
-- Phase 4: Core Logic & Integration (main.py) - Integrate `SophosClient` and `StateManager`:
-    - In `initialize_services`: Uncomment/add `SophosClient` and `StateManager` initialization using config values. Handle their specific initialization errors (e.g., `SophosConfigurationError`, `SophosConnectionError`, `StateManagerError`). Call `state_manager.load_state()` after successful initialization. Pass the initialized clients/manager in the returned `services` dictionary. Add checks after initialization to ensure critical clients (Sophos, StateManager) are available before proceeding in `run_chore_check`.
-    - In `process_child`:
-        - Retrieve the `sophos_client` and `state_manager` from the `services` dictionary.
-        - Before checking Todoist (if after cutoff): Call `state_manager.check_if_done_today`. If `True`, log that the child is already marked done, ensure the rule is disabled (call `set_rule_status(..., target_enabled_state=False)` perhaps with an idempotency check message), and `return` early from `process_child`.
-        - After determining the `intended_action` ("ENABLE" or "DISABLE") based on time or Todoist results:
-            - Check if `sophos_client` is available. If not, log an error and skip the firewall update.
-            - If available, call `sophos_client.set_rule_status(rule_name, target_enabled_state=(intended_action == "ENABLE"))`.
-            - Wrap the `set_rule_status` call in a `try...except` block to catch `SophosApiError`, `SophosConnectionError`, or other potential issues. Log errors clearly if the update fails.
-            - **Crucially:** If the `set_rule_status` call was successful *and* the `intended_action` was "DISABLE" (meaning chores were completed), call `state_manager.mark_done_today(child_name, today_str)`. Log this action.
-    - In `run_chore_check`: At the very end (after processing all children), add a call to `state_manager.save_state()` within a `try...except` block to persist the potentially updated state. Ensure this runs even if some child processing failed, but perhaps skip if `state_manager` itself failed to initialize.
-
 - Phase 5: Logging and Error Handling Polish - Implement and review logging/error handling:
     - In `main.py::setup_logging`: Uncomment and configure file logging using `logging.FileHandler` and `config.LOG_FILE_PATH`. Consider adding log rotation (`logging.handlers.RotatingFileHandler`) for long-term use (e.g., max size, number of backups).
     - Review logging across all modules (`main.py`, `todoist_client.py`, `sophos_client.py`, `state_manager.py`): Ensure log messages provide sufficient context (timestamps, child names, rule names, API parameters where safe, state info). Check consistency of log levels (INFO for routine actions, WARNING for non-critical issues/retries/fail-safes, ERROR for failures that don't stop the whole run, CRITICAL for initialization failures or unhandled exceptions). Ensure exceptions are logged appropriately, including stack traces for unexpected errors (`exc_info=True`).
@@ -31,11 +10,3 @@ Project Overview: Develop an automated Python application, "Kids Chore Monitor,"
     - Place the project code and the populated `.env` file in the execution directory. Ensure the `.env` file has appropriate permissions (readable by the execution user, but not world-readable).
     - Grant necessary file system permissions for the execution user to write to `config.LOG_FILE_PATH` and `config.STATE_FILE_PATH` in their respective locations.
     - Configure system scheduling (e.g., cron on Linux, Task Scheduler on Windows) to execute the `main.py` script at regular intervals (e.g., every 5, 10, or 15 minutes). Ensure the scheduler runs the script with the correct Python interpreter and within the correct working directory or specifies full paths. Redirect cron job output (`>/path/to/cron.log 2>&1`) to capture logs and errors.
-
-- Refactoring: Improve Modularity in `get_todoist_ids.py`:
-    - Break down the `find_and_print_ids` function into smaller, more focused functions:
-        - `_load_config_and_init_api()`: Handles loading `.env`, getting the API key, and initializing `TodoistAPI`. Returns the `api` object or exits on error.
-        - `_find_project_id(api, project_name)`: Takes the API object and target name, iterates through projects, returns the found project ID or `None`, and logs results/errors.
-        - `_find_section_ids(api, project_id, section_names)`: Takes API object, project ID, and list of target section names. Fetches sections for the project, returns a dictionary mapping found section names to their IDs (`{name: id}`), and logs results/errors/missing sections.
-        - `_print_results(project_id, found_section_ids, target_sections)`: Takes the results and formats the output for the `.env` file, including warnings for missing sections.
-    - Update the main execution block (`if __name__ == "__main__":`) in `get_todoist_ids.py` to call these new functions sequentially, passing data between them. Improve error handling between steps (e.g., don't try to find sections if the project wasn't found).

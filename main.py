@@ -2,7 +2,8 @@
 """
 Main application script for Kids Chore Monitor.
 
-Coordinates chore checks against Todoist and (eventually) updates Sophos Firewall rules.
+Coordinates chore checks against Todoist and updates Sophos Firewall rules based
+on completion status and time, managing daily state persistence.
 """
 
 import logging
@@ -22,17 +23,11 @@ except ImportError:
     sys.exit(1)
 
 # --- Service/Client Imports ---
-# We place imports inside functions that need them or keep them top-level
-# if widely used (like logging, sys, datetime). For clients, importing
-# within initialize_services is reasonable.
-# from todoist_client import TodoistClient, TodoistClientError, TodoistApiError, TodoistConfigurationError
-# from sophos_client import SophosClient, ... # Placeholder
-# from state_manager import StateManager, ... # Placeholder
-
+# Moved specific client imports into initialize_services for tighter scope
+# and to handle potential import errors there if modules are missing.
 
 # --- Child Configuration ---
 # Structure mapping names to config values for processing loop
-# Kept top-level as it's static configuration data used by the main loop.
 CHILDREN_CONFIG = [
     {
         "name": "Daniel",
@@ -47,114 +42,142 @@ CHILDREN_CONFIG = [
 ]
 
 # --- Logging Setup Function ---
-# Encapsulate logger setup.
 def setup_logging() -> logging.Logger:
     """Configures and returns the root logger."""
     log_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - [%(module)s.%(funcName)s] - %(message)s'
     )
     logger = logging.getLogger() # Get root logger
-    logger.setLevel(logging.INFO) # Set default level for root
+    logger.setLevel(logging.INFO) # Default level for root
 
-    # Clear existing handlers to avoid duplicates if script is re-run in some contexts
     if logger.hasHandlers():
         logger.handlers.clear()
 
-    # Console Handler - Set level based on needs (e.g., DEBUG for dev, INFO for prod)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(log_formatter)
-    console_handler.setLevel(logging.DEBUG) # Show detailed logs during development/testing
+    console_handler.setLevel(logging.DEBUG) # Show detailed logs during development
     logger.addHandler(console_handler)
 
-    # --- Placeholder for File Logging ---
-    # file_handler = logging.FileHandler(config.LOG_FILE_PATH)
-    # file_handler.setFormatter(log_formatter)
-    # file_handler.setLevel(logging.INFO) # Log info and above to file
-    # logger.addHandler(file_handler)
+    # --- Placeholder for File Logging (Phase 5) ---
+    # try:
+    #     file_handler = logging.FileHandler(config.LOG_FILE_PATH)
+    #     file_handler.setFormatter(log_formatter)
+    #     file_handler.setLevel(logging.INFO) # Log info and above to file
+    #     logger.addHandler(file_handler)
+    # except Exception as e:
+    #     logger.error("Failed to configure file logging to %s: %s", config.LOG_FILE_PATH, e, exc_info=True)
     # --- End Placeholder ---
 
     return logger
 
 # --- Initialization Function ---
-def initialize_services() -> Tuple[Optional[Any], Optional[Any], Optional[Any]]:
+def initialize_services() -> Dict[str, Optional[Any]]:
     """
     Initializes required service clients (Todoist, Sophos, StateManager).
 
     Returns:
-        A tuple containing initialized clients (todoist, sophos, state_manager).
-        Returns None for a client if initialization fails.
+        A dictionary containing initialized clients keyed by name
+        ('todoist', 'sophos', 'state_manager'). Value is None if initialization failed.
     """
-    # Import clients here to keep scope tight
-    from todoist_client import (
-        TodoistClient, TodoistConfigurationError, TodoistClientError
-    )
-    # from sophos_client import SophosClient, SophosConfigurationError, SophosConnectionError # Placeholder
-    # from state_manager import StateManager, StateManagerError # Placeholder
+    # Import clients here to keep scope tight and handle import errors gracefully
+    try:
+        from todoist_client import (
+            TodoistClient, TodoistConfigurationError, TodoistClientError, TodoistApiError
+        )
+    except ImportError:
+        logging.critical("Failed to import TodoistClient. Ensure todoist_client.py exists and dependencies are installed.", exc_info=True)
+        TodoistClient = None # Define as None to prevent NameError below
+        TodoistConfigurationError = TodoistClientError = TodoistApiError = Exception # Dummy exceptions
 
-    logger = logging.getLogger(__name__) # Use module-specific logger if desired, or root
-    todoist_client = None
-    # sophos_client = None # Placeholder
-    # state_manager = None # Placeholder
+    try:
+        from sophos_client import (
+            SophosClient, SophosConfigurationError, SophosConnectionError,
+            SophosApiError, SophosRuleNotFoundError
+        )
+    except ImportError:
+        logging.critical("Failed to import SophosClient. Ensure sophos_client.py exists and dependencies are installed.", exc_info=True)
+        SophosClient = None
+        SophosConfigurationError = SophosConnectionError = SophosApiError = SophosRuleNotFoundError = Exception
+
+    try:
+        from state_manager import StateManager, StateFileError, StateManagerError
+    except ImportError:
+        logging.critical("Failed to import StateManager. Ensure state_manager.py exists.", exc_info=True)
+        StateManager = None
+        StateFileError = StateManagerError = Exception
+
+    logger = logging.getLogger(__name__) # Use module-specific logger
+    services: Dict[str, Optional[Any]] = {
+        "todoist": None,
+        "sophos": None,
+        "state_manager": None
+    }
 
     # Initialize Todoist Client
-    try:
-        logger.debug("Initializing TodoistClient...")
-        todoist_client = TodoistClient(
-            api_key=config.TODOIST_API_KEY,
-            timezone_str=config.TIMEZONE
-        )
-        logger.info("TodoistClient initialized.")
-        # Optional: Add connection test call here if needed for immediate feedback
-        # todoist_client._test_connection()
-    except (TodoistConfigurationError, RuntimeError, ConnectionError) as e:
-        logger.critical("Failed to initialize TodoistClient: %s", e, exc_info=True)
-    except Exception as e: # Catch any other unexpected init errors
-        logger.critical("Unexpected error initializing TodoistClient: %s", e, exc_info=True)
-
-    # --- Placeholder for Sophos Client Initialization ---
-    # try:
-    #     logger.debug("Initializing SophosClient...")
-    #     sophos_client = SophosClient(
-    #         host=config.SOPHOS_HOST,
-    #         api_user=config.SOPHOS_API_USER,
-    #         api_password=config.SOPHOS_API_PASSWORD
-    #     )
-    #     logger.info("SophosClient initialized.")
-    # except (SophosConfigurationError, SophosConnectionError) as e:
-    #     logger.critical("Failed to initialize SophosClient: %s", e, exc_info=True)
-    # except Exception as e:
-    #     logger.critical("Unexpected error initializing SophosClient: %s", e, exc_info=True)
-    # --- End Placeholder ---
-
-    # --- Placeholder for State Manager Initialization ---
-    # try:
-    #     logger.debug("Initializing StateManager...")
-    #     state_manager = StateManager(config.STATE_FILE_PATH)
-    #     state_manager.load_state() # Load initial state
-    #     logger.info("StateManager initialized and state loaded.")
-    # except StateManagerError as e:
-    #     logger.critical("Failed to initialize or load state with StateManager: %s", e, exc_info=True)
-    # except Exception as e:
-    #     logger.critical("Unexpected error initializing StateManager: %s", e, exc_info=True)
-    # --- End Placeholder ---
+    if TodoistClient:
+        try:
+            logger.debug("Initializing TodoistClient...")
+            todoist_client = TodoistClient(
+                api_key=config.TODOIST_API_KEY,
+                timezone_str=config.TIMEZONE
+            )
+            logger.info("TodoistClient initialized.")
+            services["todoist"] = todoist_client
+            # Optional: todoist_client._test_connection() # Consider if needed
+        except (TodoistConfigurationError, RuntimeError, ConnectionError) as e:
+            logger.critical("Failed to initialize TodoistClient: %s", e, exc_info=False) # Log concise critical error
+            logger.debug("TodoistClient initialization error details:", exc_info=True) # Log full trace at debug level
+        except Exception as e:
+            logger.critical("Unexpected error initializing TodoistClient: %s", e, exc_info=True)
+    else:
+        logger.critical("TodoistClient class not available due to import failure.")
 
 
-    # Return initialized clients (or None if failed)
-    # Adjust tuple elements as clients are implemented
-    return todoist_client, None, None # (todoist_client, sophos_client, state_manager)
+    # Initialize Sophos Client
+    if SophosClient:
+        try:
+            logger.debug("Initializing SophosClient...")
+            sophos_client = SophosClient(
+                host=config.SOPHOS_HOST,
+                api_user=config.SOPHOS_API_USER,
+                api_password=config.SOPHOS_API_PASSWORD
+                # Add port=, verify_ssl= if needed from config
+            )
+            logger.info("SophosClient initialized.")
+            services["sophos"] = sophos_client
+        except (SophosConfigurationError, SophosConnectionError) as e:
+            logger.critical("Failed to initialize SophosClient: %s", e, exc_info=False)
+            logger.debug("SophosClient initialization error details:", exc_info=True)
+        except Exception as e:
+            logger.critical("Unexpected error initializing SophosClient: %s", e, exc_info=True)
+    else:
+        logger.critical("SophosClient class not available due to import failure.")
+
+
+    # Initialize State Manager
+    if StateManager:
+        try:
+            logger.debug("Initializing StateManager...")
+            state_manager = StateManager(config.STATE_FILE_PATH)
+            state_manager.load_state() # Load initial state immediately
+            logger.info("StateManager initialized and state loaded.")
+            services["state_manager"] = state_manager
+        except (StateFileError, StateManagerError, ValueError) as e: # Catch init errors too
+            logger.critical("Failed to initialize or load state with StateManager: %s", e, exc_info=True)
+        except Exception as e:
+            logger.critical("Unexpected error initializing StateManager: %s", e, exc_info=True)
+    else:
+        logger.critical("StateManager class not available due to import failure.")
+
+
+    return services
 
 
 # --- Time Status Function ---
 def get_time_status() -> Dict[str, Any]:
     """
     Determines the current time, cutoff status, and today's date string.
-
-    Returns:
-        A dictionary containing: 'now', 'today_str', 'current_hour', 'is_after_cutoff'.
-
-    Raises:
-        ValueError: If the timezone configuration is invalid.
-        Exception: For other unexpected errors during time calculation.
+    (No changes needed for Phase 4 integration)
     """
     logger = logging.getLogger(__name__)
     logger.debug("Determining current time and cutoff status...")
@@ -182,18 +205,13 @@ def get_time_status() -> Dict[str, Any]:
         raise ValueError(f"Invalid timezone: {config.TIMEZONE}") from e
     except Exception as e:
         logger.critical("Failed to determine current time or timezone: %s", e, exc_info=True)
-        raise # Re-raise unexpected errors
+        raise
 
 
 # --- Child Processing Function ---
 def process_child(child_config: Dict[str, Any], time_status: Dict[str, Any], services: Dict[str, Any]):
     """
-    Processes chore status and determines firewall action for a single child.
-
-    Args:
-        child_config: Dictionary containing the child's configuration ('name', 'todoist_section_id', 'sophos_rule_name').
-        time_status: Dictionary containing time information from get_time_status().
-        services: Dictionary containing initialized service clients ('todoist', 'sophos', 'state_manager').
+    Processes chore status and determines/applies firewall action for a single child.
     """
     logger = logging.getLogger(__name__)
     child_name = child_config["name"]
@@ -202,98 +220,156 @@ def process_child(child_config: Dict[str, Any], time_status: Dict[str, Any], ser
     is_after_cutoff = time_status["is_after_cutoff"]
     current_hour = time_status["current_hour"]
     cutoff_hour = time_status["cutoff_hour"]
-    today_str = time_status["today_str"] # Needed for state manager later
+    today_str = time_status["today_str"]
 
+    # Retrieve clients from services dictionary
     todoist_client = services.get('todoist')
-    # sophos_client = services.get('sophos') # Placeholder
-    # state_manager = services.get('state_manager') # Placeholder
+    sophos_client = services.get('sophos') # May be None if init failed
+    state_manager = services.get('state_manager') # May be None if init failed
 
     logger.info("--- Processing Child: %s ---", child_name)
 
     if not section_id or not rule_name:
         logger.error("Child '%s' is missing required configuration (section ID or rule name). Skipping.", child_name)
         return
+    if not sophos_client:
+         logger.error("Sophos client is not available for '%s'. Cannot manage firewall rule. Skipping.", child_name)
+         return # Cannot proceed without Sophos client
+
+    # --- Default Assumption: Firewall rule should be ENABLED (Internet OFF) ---
+    # This is the fail-safe state if checks cannot be completed.
+    intended_action = "ENABLE" # ENABLE = Internet OFF
+    reason = "Default state before checks"
 
     # --- Logic Branch: Before vs After Cutoff ---
     if not is_after_cutoff:
         # Rule: Before cutoff time -> Ensure internet is ON (Rule Disabled)
         intended_action = "DISABLE"
         reason = f"Time ({current_hour}:00) is before cutoff ({cutoff_hour}:00)."
-        logger.info("Intended Firewall Action for '%s': %s rule '%s'. Reason: %s",
+        logger.info("Intention for '%s': %s rule '%s'. Reason: %s",
                     child_name, intended_action, rule_name, reason)
-        # Placeholder: sophos_client.set_rule_status(rule_name, enabled=False)
     else:
-        # Rule: After cutoff time -> Check chores to determine internet status
-        logger.info("Time is on/after cutoff. Checking '%s' chores in Todoist section %s.", child_name, section_id)
-        intended_action = "N/A" # Determine below
-        reason = "N/A"
+        # Rule: After cutoff time -> Check state, then chores
+        logger.info("Time is on/after cutoff for '%s'. Checking state and/or chores.", child_name)
 
-        # --- Placeholder: Check state manager first ---
-        # if state_manager and state_manager.check_if_done_today(child_name, today_str):
-        #     intended_action = "DISABLE"
-        #     reason = "Already marked as completed today in state file."
-        #     logger.info("Child '%s' already completed chores today. Intended Action: %s rule '%s'. Reason: %s",
-        #                 child_name, intended_action, rule_name, reason)
-        #     # No Sophos action needed if state matches reality, but log intent
-        #     # Placeholder: sophos_client.set_rule_status(rule_name, enabled=False) # Ensure it stays disabled
-        #     return # Skip further checks if already done
-        # --- End Placeholder ---
+        # Check state manager first
+        if state_manager:
+            if state_manager.check_if_done_today(child_name, today_str):
+                intended_action = "DISABLE"
+                reason = f"Already marked as completed today ({today_str}) in state file."
+                logger.info("Intention for '%s': %s rule '%s'. Reason: %s",
+                            child_name, intended_action, rule_name, reason)
+                # Skip Todoist check if already marked done
+                apply_firewall_action(sophos_client, child_name, rule_name, intended_action, reason, state_manager, today_str)
+                return # Finished processing this child
+            else:
+                 logger.info("Child '%s' not marked as done today in state. Proceeding to check Todoist.", child_name)
+        else:
+             logger.warning("StateManager not available for '%s'. Cannot check/update completion state. Proceeding to check Todoist.", child_name)
 
 
         # --- Check Todoist ---
         if not todoist_client:
-             logger.error("Todoist client not available for '%s'. Applying fail-safe (ENABLE rule).", child_name)
+             # Fail-Safe: Cannot check chores -> Keep internet OFF
              intended_action = "ENABLE"
-             reason = "Todoist client failed to initialize."
+             reason = "Todoist client not available. Applying fail-safe (ENABLE rule)."
+             logger.error("Intention for '%s': %s rule '%s'. Reason: %s", child_name, intended_action, rule_name, reason)
         else:
-            # Import specific errors needed here
-            from todoist_client import TodoistApiError, TodoistClientError
+            # Import specific errors needed here - already imported at top level now
+            from todoist_client import TodoistApiError, TodoistClientError # Keep for clarity maybe
             try:
                 tasks_incomplete = todoist_client.are_child_tasks_incomplete(section_id)
-                logger.info("Todoist check result for '%s': Incomplete tasks due today/overdue = %s", child_name, tasks_incomplete)
+                logger.info("Todoist check result for '%s' (section %s): Incomplete tasks due today/overdue = %s",
+                            child_name, section_id, tasks_incomplete)
 
                 if tasks_incomplete:
-                    # Rule: Incomplete tasks -> Internet OFF (Rule Enabled)
                     intended_action = "ENABLE"
                     reason = "Incomplete/overdue tasks found in Todoist."
                 else:
-                    # Rule: All tasks complete -> Internet ON (Rule Disabled)
                     intended_action = "DISABLE"
                     reason = "All tasks due today/overdue are complete in Todoist."
-                    # Placeholder: If Sophos action successful: state_manager.mark_done_today(child_name, today_str)
+
+                log_level = logging.WARNING if intended_action == "ENABLE" else logging.INFO
+                logger.log(log_level, "Intention for '%s': %s rule '%s'. Reason: %s",
+                           child_name, intended_action, rule_name, reason)
 
             except TodoistApiError as e:
-                # Fail-Safe Rule: API error -> Assume incomplete -> Internet OFF (Rule Enabled)
                 intended_action = "ENABLE"
-                reason = f"Could not confirm chore status due to Todoist API error after retries: {e}"
-                logger.error("Failed to check Todoist status for '%s'. Applying fail-safe. Error: %s", child_name, e, exc_info=False)
+                reason = f"Fail-safe due to Todoist API error after retries: {e}"
+                logger.error("Intention for '%s': %s rule '%s'. Reason: %s", child_name, intended_action, rule_name, reason)
             except (TodoistClientError, ValueError) as e:
-                # Fail-Safe Rule: Client error -> Assume incomplete -> Internet OFF (Rule Enabled)
                 intended_action = "ENABLE"
-                reason = f"Could not confirm chore status due to internal client error: {e}"
-                logger.error("Failed to check Todoist status for '%s' due to client error. Applying fail-safe.", child_name, exc_info=True)
+                reason = f"Fail-safe due to internal Todoist client error: {e}"
+                logger.error("Intention for '%s': %s rule '%s'. Reason: %s", child_name, intended_action, rule_name, reason)
             except Exception as e:
-                # Fail-Safe Rule: Unexpected error -> Assume incomplete -> Internet OFF (Rule Enabled)
                 intended_action = "ENABLE"
-                reason = f"Could not confirm chore status due to unexpected error: {e}"
-                logger.exception("Unexpected error processing child '%s'. Applying fail-safe.", child_name, exc_info=True)
+                reason = f"Fail-safe due to unexpected error checking Todoist: {e}"
+                logger.exception("Intention for '%s': %s rule '%s'. Reason: %s", child_name, intended_action, rule_name, reason, exc_info=True)
 
-        # --- Log Final Intended Action (After Cutoff) ---
-        log_level = logging.WARNING if intended_action == "ENABLE" else logging.INFO
-        fail_safe_tag = "(Fail-Safe)" if reason != "Incomplete/overdue tasks found in Todoist." and reason != "All tasks due today/overdue are complete in Todoist." else ""
-        logger.log(log_level, "Intended Firewall Action for '%s' %s: %s rule '%s'. Reason: %s",
-                   child_name, fail_safe_tag, intended_action, rule_name, reason)
 
-        # --- Placeholder: Call Sophos Client ---
-        # if sophos_client and intended_action != "N/A":
-        #     target_enabled = (intended_action == "ENABLE")
-        #     success = sophos_client.set_rule_status(rule_name, target_enabled_state=target_enabled)
-        #     if success and not target_enabled and state_manager: # If rule disabled successfully and tasks were complete
-        #           logger.info("Marking child '%s' as done for today (%s) in state.", child_name, today_str)
-        #           state_manager.mark_done_today(child_name, today_str)
-        # elif not sophos_client:
-        #      logger.error("Sophos client not available for '%s'. Cannot apply intended action %s.", child_name, intended_action)
-        # --- End Placeholder ---
+    # --- Apply the Determined Firewall Action ---
+    # This section is reached if not returned early (e.g., from state check)
+    apply_firewall_action(sophos_client, child_name, rule_name, intended_action, reason, state_manager, today_str)
+
+
+def apply_firewall_action(
+    sophos_client: Any, # Using Any to avoid SophosClient potentially being None type hint issue
+    child_name: str,
+    rule_name: str,
+    intended_action: str, # "ENABLE" or "DISABLE"
+    reason: str,
+    state_manager: Any, # Using Any to avoid StateManager potentially being None type hint issue
+    today_str: str
+):
+    """
+    Applies the intended firewall rule state and updates state manager if needed.
+    """
+    logger = logging.getLogger(__name__)
+
+    if not sophos_client:
+         logger.error("Sophos client not available for '%s'. Cannot apply intended action %s.", child_name, intended_action)
+         return # Should have been caught earlier, but double-check
+
+    target_enabled_state = (intended_action == "ENABLE")
+    action_desc = "ENABLE (Internet OFF)" if target_enabled_state else "DISABLE (Internet ON)"
+
+    logger.info("Applying final decision for '%s': Set rule '%s' to %s. Reason: %s",
+                child_name, rule_name, action_desc, reason)
+
+    try:
+        # Import specific Sophos errors here if needed for finer-grained handling,
+        # otherwise rely on base exceptions caught.
+        from sophos_client import SophosApiError, SophosConnectionError, SophosRuleNotFoundError
+
+        success = sophos_client.set_rule_status(rule_name, target_enabled_state=target_enabled_state)
+
+        if success:
+            logger.info("Successfully applied state %s for rule '%s' (%s).",
+                        action_desc, rule_name, child_name)
+            # If we successfully DISABLED the rule (Internet ON) because chores are done...
+            if not target_enabled_state:
+                if state_manager:
+                    # ...mark the child as done for today in the state manager.
+                    logger.info("Marking child '%s' as done for today (%s) in state.", child_name, today_str)
+                    state_manager.mark_done_today(child_name, today_str)
+                    # State will be saved later by run_chore_check
+                else:
+                     logger.warning("StateManager not available. Cannot mark '%s' as done today after disabling rule.", child_name)
+        else:
+            # set_rule_status returning False usually means rule not found or API error logged within the client
+            logger.error("Sophos client reported failure attempting to set rule '%s' (%s) to state %s. Check previous logs.",
+                         rule_name, child_name, action_desc)
+
+    except SophosRuleNotFoundError:
+         # This shouldn't happen if set_rule_status handles it, but catch defensively
+         logger.error("Rule '%s' (%s) was not found during the set operation.", rule_name, child_name)
+    except (SophosApiError, SophosConnectionError) as e:
+        logger.error("Failed to set rule '%s' (%s) to state %s due to Sophos API/Connection error: %s",
+                     rule_name, child_name, action_desc, e, exc_info=False) # Log specific error concisely
+        logger.debug("Sophos set_rule_status error details:", exc_info=True) # Full trace at debug
+    except Exception as e:
+        logger.exception("Unexpected error setting Sophos rule '%s' (%s) state: %s",
+                         rule_name, child_name, e, exc_info=True)
 
 
 # --- Main Execution Logic ---
@@ -304,18 +380,27 @@ def run_chore_check(logger: logging.Logger):
     logger.info("="*20 + " Starting Chore Check Run " + "="*20)
 
     # --- Initialize Services ---
-    # This needs to happen first to ensure logging/clients are ready.
-    todoist_client, sophos_client, state_manager = initialize_services()
-    services = {
-        "todoist": todoist_client,
-        "sophos": sophos_client,
-        "state_manager": state_manager
-    }
+    services = initialize_services()
+    todoist_client = services["todoist"]
+    sophos_client = services["sophos"]
+    state_manager = services["state_manager"]
 
-    # Exit early if critical services failed (e.g., Todoist essential)
-    # Add checks for sophos/state_manager if they become critical failures.
+    # --- Critical Service Checks ---
+    # Decide which services are absolutely essential for a run to even attempt processing
+    # For now, assume all three are required for full functionality.
+    critical_services_ok = True
     if not todoist_client:
-        logger.critical("Cannot proceed without initialized Todoist Client.")
+        logger.critical("Todoist Client failed to initialize. Cannot check chores.")
+        critical_services_ok = False
+    if not sophos_client:
+        logger.critical("Sophos Client failed to initialize. Cannot manage firewall rules.")
+        critical_services_ok = False
+    if not state_manager:
+        logger.critical("State Manager failed to initialize. Cannot manage completion state.")
+        critical_services_ok = False
+
+    if not critical_services_ok:
+        logger.error("One or more critical services failed to initialize. Aborting chore check run.")
         logger.info("="*20 + " Chore Check Run Failed (Initialization) " + "="*20)
         return
 
@@ -324,8 +409,9 @@ def run_chore_check(logger: logging.Logger):
         time_status = get_time_status()
     except (ValueError, Exception):
         # Error already logged in get_time_status
+        logger.error("Failed to determine time status. Aborting chore check run.")
         logger.info("="*20 + " Chore Check Run Failed (Time Check) " + "="*20)
-        return # Cannot proceed without valid time info
+        return
 
     # --- Process Each Child ---
     logger.info("Processing children configurations...")
@@ -335,39 +421,39 @@ def run_chore_check(logger: logging.Logger):
         except Exception as e:
             # Catch unexpected errors during a specific child's processing
             child_name = child_config.get("name", "Unknown")
-            logger.exception("Unexpected critical error processing child '%s'. Continuing to next child if possible.",
+            logger.exception("Unexpected critical error processing child '%s'. Continuing to next child.",
                              child_name, exc_info=True)
 
-    # --- Placeholder: Save State ---
-    # if state_manager:
-    #     try:
-    #         logger.info("Attempting to save application state...")
-    #         state_manager.save_state()
-    #         logger.info("Application state saved successfully.")
-    #     except Exception as e:
-    #         logger.error("Failed to save application state.", exc_info=True)
-    # --- End Placeholder ---
+    # --- Save State ---
+    if state_manager:
+        try:
+            logger.info("Attempting to save application state...")
+            state_manager.save_state()
+            logger.info("Application state saved successfully.")
+        except Exception as e:
+            # Error already logged by save_state, but log context here too
+            logger.error("Failed to save application state at the end of the run.", exc_info=True)
+    else:
+        # Should not happen if critical check passed, but log defensively
+        logger.warning("StateManager was not available at the end of the run. Cannot save state.")
+
 
     logger.info("="*20 + " Chore Check Run Finished " + "="*20)
 
 
 if __name__ == "__main__":
-    # Setup logging ONCE at the start
     logger = setup_logging()
     try:
-        # Uncomment to verify loaded config during testing:
         # logger.info("Printing configuration summary (excluding secrets)...")
         # config.print_config_summary() # Assumes config.py has this function
 
         run_chore_check(logger)
 
     except Exception as e:
-        # Catch truly unexpected errors outside the main run function
         fallback_message = f"CRITICAL UNHANDLED ERROR in __main__: {e}"
         print(fallback_message, file=sys.stderr)
         try:
-            # Attempt to log, might fail if logging setup failed
             logger.critical(fallback_message, exc_info=True)
         except NameError:
-            pass # logger not defined
+            pass # logger might not be defined if setup_logging failed catastrophically
         sys.exit(1)
