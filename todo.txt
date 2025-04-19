@@ -1,28 +1,58 @@
 --- Updated todo.txt ---
 Project Overview: Develop an automated Python application, "Kids Chore Monitor," to integrate Todoist task management with Sophos Firewall control. The application will monitor chore completion status for specific children (Daniel, Sophie) within designated Todoist sections. Based on whether their tasks are completed by a configurable daily cutoff time, the system will automatically enable or disable their respective internet access rules managed by the Sophos Firewall. The application relies on API interactions with both Todoist and Sophos, manages daily completion state via a JSON file, and utilizes configuration settings loaded from an .env file. Robust logging is essential for monitoring and troubleshooting.
--- you need to add all variables to .env
-DONE - Phase 1: Todoist Integration (todoist_client.py) - Initialize the Todoist API client using the configured API key.
-DONE - Phase 1: Todoist Integration (todoist_client.py) - Implement are_child_tasks_incomplete function: Check if any active tasks in a given section are due today or overdue. Handle potential API errors with a retry mechanism. Log API calls, results, and errors. Return True if incomplete tasks exist, False otherwise. Consider raising a custom error on persistent API failure.
-BUGFIX: Phase 1: Todoist Integration (todoist_client.py) - Investigate and fix TypeError: strptime() argument 1 must be str, not datetime.date occurring within are_child_tasks_incomplete. Determine the actual data type of task.due.date returned by the todoist-api-python library and adjust the date comparison logic accordingly. It seems the attribute might already be a date/datetime object, not a string as previously assumed.
-Phase 2: Sophos Integration (sophos_client.py) - Implement the SophosClient class:
-Constructor (__init__): Accepts Sophos host, API username, and password. Initializes the underlying Sophos Firewall API library client. Handles connection and authentication errors during initialization, logging appropriately and raising specific exceptions (e.g., SophosConnectionError). Logs successful initialization.
-get_rule_status(rule_name: str) -> str | None: Retrieves the current status (e.g., 'Enabled', 'Disabled') of a firewall rule identified by its exact name. Handles errors like 'rule not found' gracefully (log warning, return None). Catches and logs API communication errors, raising a specific exception (e.g., SophosApiError). Logs the query and result.
-set_rule_status(rule_name: str, target_enabled_state: bool) -> bool: Updates the status of a firewall rule by name to match the target_enabled_state (True for enabled, False for disabled). Must include an idempotency check: call get_rule_status first; if the rule is already in the desired state, log this and return True without making an update call. If an update is needed, make the API call to change the rule state. Log the attempted action, parameters, and success/failure. Handle API errors during the update, log details, and return False on failure, True on success.
-Phase 3: State Management (state_manager.py) - Define the structure for the JSON state file (e.g., storing the last completion date per child).
-Phase 3: State Management (state_manager.py) - Implement load_state function: Read and parse the JSON state file. Handle FileNotFoundError (return default empty state) and JSON decoding errors gracefully.
-Phase 3: State Management (state_manager.py) - Implement save_state function: Write the current state dictionary to the JSON file. Handle potential IOError during file writing.
-Phase 3: State Management (state_manager.py) - Implement check_if_done_today function: Check the loaded state to see if a specific child is already marked as completed for the current date.
-Phase 3: State Management (state_manager.py) - Implement mark_done_today function: Update the state dictionary in memory to mark a child as completed for the current date. (Saving is handled separately).
-Phase 4: Core Logic & Integration (main.py) - Perform initial setup: Configure logging, load application configuration, initialize Todoist and Sophos API clients, and load the initial state from the state file.
-Phase 4: Core Logic & Integration (main.py) - Implement time check logic: Determine the current time in the configured timezone and compare it against the CUTOFF_HOUR from the configuration.
-Phase 4: Core Logic & Integration (main.py) - Define or load child-specific configuration (mapping child names to Todoist section IDs and Sophos rule names). (Partially done in test harness).
-Phase 4: Core Logic & Integration (main.py) - Implement the main processing loop iterating through each configured child. (Partially done in test harness).
-Phase 4: Core Logic & Integration (main.py) - Implement logic for before the cutoff time: Ensure the relevant Sophos firewall rule for each child is disabled using SophosClient.set_rule_status. Log the action, respecting idempotency checks.
-Phase 4: Core Logic & Integration (main.py) - Implement logic for after the cutoff time: For each child, check if already marked complete today (using state manager). If not, check Todoist for incomplete tasks using TodoistClient.are_child_tasks_incomplete. Based on Todoist status, determine the target Sophos rule state (incomplete tasks -> rule enabled, completed tasks -> rule disabled). Apply the change via SophosClient.set_rule_status. If tasks were completed and the rule successfully disabled, update the state using the state manager's mark_done_today. Handle potential errors from Todoist/Sophos calls gracefully (e.g., log error, apply fail-safe rule state - typically enable/block internet).
-Phase 4: Core Logic & Integration (main.py) - After processing all children (if running after the cutoff), save the updated state back to the JSON file using the state manager's save_state.
-Phase 5: Logging and Error Handling Polish - Configure the standard logging module in main.py for clear output (to file and potentially console) including timestamps, levels, and messages. Log script start and end. (Basic console logging exists).
-Phase 5: Logging and Error Handling Polish - Review logging across all modules: Ensure logs are detailed, clearly indicate which child is being processed, capture decisions, API call results, state changes, and errors (including stack traces where relevant).
-Phase 5: Logging and Error Handling Polish - Review error handling: Ensure all external interactions (API calls, file I/O) are wrapped in appropriate try...except blocks. Verify the robustness of the Todoist API retry logic and the Sophos "fail-safe" behavior (disabling rule on error).
-Phase 6: Deployment & Scheduling - Prepare the target execution environment (e.g., server, Raspberry Pi) ensuring Python and all dependencies (requirements.txt) are installed. Place the .env file with secrets.
-Phase 6: Deployment & Scheduling - Grant necessary file system permissions for the script to read/write the log file and the state JSON file.
-Phase 6: Deployment & Scheduling - Configure system scheduling (e.g., cron on Linux/macOS, Task Scheduler on Windows) to execute the main.py script at a regular interval (e.g., every 5 minutes). Ensure the scheduled task runs with the correct context or environment variables loaded. Redirect cron output for troubleshooting.
+
+- Phase 2: Sophos Integration (sophos_client.py) - Implement the SophosClient class:
+    - Define custom exceptions (e.g., `SophosClientError`, `SophosApiError`, `SophosConfigurationError`, `SophosRuleNotFoundError`).
+    - Constructor (`__init__`): Accepts Sophos host, API username, and password from config. Initializes the underlying `sophosfirewall-python` library client (or equivalent). Handle connection and authentication errors during initialization (e.g., invalid credentials, host unreachable), logging appropriately and raising specific custom exceptions. Log successful initialization. Consider adding a `_test_connection` method that performs a basic API call (like fetching system info) to verify credentials immediately.
+    - `get_rule_status(rule_name: str) -> Optional[bool]`: Retrieves the current status (enabled/disabled) of a firewall rule identified by its *exact* name.
+        - Fetch the rule definition from the Sophos API.
+        - Handle the case where the rule is not found (log a warning, raise `SophosRuleNotFoundError` or return a specific indicator like `None`).
+        - Parse the rule data to determine if it's currently enabled (typically a 'Status' field).
+        - Return `True` if enabled, `False` if disabled.
+        - Catch and log underlying API communication errors, raising `SophosApiError`. Log the query parameters and the outcome (status found or error).
+    - `set_rule_status(rule_name: str, target_enabled_state: bool) -> bool`: Updates the status of a firewall rule by name to match the `target_enabled_state` (True for enabled, False for disabled).
+        - **Idempotency Check:** Call `get_rule_status(rule_name)` first.
+        - If the rule is already in the `target_enabled_state`, log this (e.g., "Rule 'X' is already in the desired state (Enabled/Disabled). No action needed.") and return `True`.
+        - If the rule needs changing:
+            - Construct the necessary API payload/call to modify the rule's status.
+            - Make the API call to update the rule.
+            - Log the attempted action (enabling/disabling rule 'X'), parameters, and the success/failure outcome from the API.
+            - Handle API errors during the update (log details, raise `SophosApiError` or return `False`).
+            - Return `True` on successful update, `False` on failure.
+        - Handle `SophosRuleNotFoundError` from the initial `get_rule_status` call (log error, return `False`).
+
+- Phase 2: Sophos Integration (test_sophos.py) - Create a manual test script (`test_sophos.py`):
+    - Load configuration using `config.py`.
+    - Initialize `SophosClient` (handle init errors).
+    - Call `_test_connection` (if implemented) or perform a basic read operation.
+    - Call `get_rule_status` for both `config.SOPHOS_DANIEL_RULE_NAME` and `config.SOPHOS_SOPHIE_RULE_NAME`. Print results clearly (e.g., "Rule 'Daniel Rule Name': Found - Status: Enabled"). Handle potential `SophosRuleNotFoundError`.
+    - *Optional (Commented Out/Controlled):* Include calls to `set_rule_status` to test idempotency (setting to current state) and potentially state changes (e.g., disable then enable). Add clear warnings about modifying firewall state.
+    - Use `try...except` blocks for API calls and report errors clearly.
+
+- Phase 3: State Management (state_manager.py) - Define the structure for the JSON state file (e.g., `{"daniel": "YYYY-MM-DD", "sophie": "YYYY-MM-DD"}`).
+
+- Phase 3: State Management (state_manager.py) - Implement `load_state` function: Read and parse the JSON state file (`config.STATE_FILE_PATH`). Handle `FileNotFoundError` (return default empty state `{}`) and JSON decoding errors gracefully (log error, return empty state).
+
+- Phase 3: State Management (state_manager.py) - Implement `save_state` function: Write the current state dictionary to the JSON file (`config.STATE_FILE_PATH`). Handle potential `IOError` during file writing (log error).
+
+- Phase 3: State Management (state_manager.py) - Implement `check_if_done_today(child_name: str, today_str: str) -> bool`: Check the loaded state dictionary to see if `state.get(child_name.lower()) == today_str`.
+
+- Phase 3: State Management (state_manager.py) - Implement `mark_done_today(child_name: str, today_str: str)`: Update the state dictionary in memory (e.g., `state[child_name.lower()] = today_str`). (Saving is handled separately by calling `save_state`).
+
+- Phase 4: Core Logic & Integration (main.py) - Integrate `SophosClient`: Uncomment/add Sophos client initialization in `initialize_services`. Pass the client in the `services` dictionary. Uncomment/add calls to `sophos_client.set_rule_status` within `process_child`, respecting idempotency and handling potential errors.
+
+- Phase 4: Core Logic & Integration (main.py) - Integrate `StateManager`: Uncomment/add StateManager initialization and `load_state` call in `initialize_services`. Pass the manager in the `services` dictionary. Uncomment/add calls to `state_manager.check_if_done_today` and `state_manager.mark_done_today` in `process_child`. Uncomment/add call to `state_manager.save_state` at the end of `run_chore_check`.
+
+- Phase 5: Logging and Error Handling Polish - Configure file logging in `main.py::setup_logging` using `config.LOG_FILE_PATH`. Ensure log rotation or size limits if necessary for long-term use.
+
+- Phase 5: Logging and Error Handling Polish - Review logging across all modules: Ensure logs capture essential context (child name, rule name, state), decisions, API call parameters/results, state changes, and errors (with stack traces where relevant). Ensure consistency in log levels (INFO for standard operations, WARNING for recoverable issues/fail-safes, ERROR for failed operations, CRITICAL for application-stopping issues).
+
+- Phase 5: Logging and Error Handling Polish - Review error handling: Ensure all external interactions (API calls, file I/O) are wrapped in appropriate `try...except` blocks using custom exceptions where defined. Verify the robustness of retry logic (Todoist) and fail-safe behaviors (main logic).
+
+- Phase 6: Deployment & Scheduling - Prepare target execution environment (e.g., server, RPi) with Python, dependencies (`requirements.txt`), and the `.env` file.
+
+- Phase 6: Deployment & Scheduling - Grant necessary file system permissions for log/state file writing.
+
+- Phase 6: Deployment & Scheduling - Configure system scheduling (cron/Task Scheduler) to run `main.py` regularly (e.g., every 5-15 minutes). Ensure correct execution context/path and environment variable loading. Consider output redirection for cron jobs (`>/path/to/cron.log 2>&1`).
+
+- Refactoring: Address Insufficient Modularity / Low Cohesion smell in `get_todoist_ids.py` by breaking down `find_and_print_ids` into smaller, more focused functions (e.g., one for finding project, one for finding sections).
