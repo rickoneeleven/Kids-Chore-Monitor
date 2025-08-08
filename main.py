@@ -38,6 +38,10 @@ except ImportError:
     # Define dummy exceptions if import fails
     SophosApiError = SophosConnectionError = SophosRuleNotFoundError = Exception
 
+# --- Time Constants ---
+BEDTIME_HOUR = 20  # 8 PM - Internet OFF for bedtime
+MORNING_HOUR = 7   # 7 AM - Internet ON for morning
+
 # --- Child Configuration ---
 # Structure mapping names to config values for processing loop
 CHILDREN_CONFIG = [
@@ -250,7 +254,13 @@ def process_child(child_config: Dict[str, Any], time_status: Dict[str, Any], ser
     reason = "Default state before checks"
     should_update_state_on_success = False # Flag to track if state update is needed upon successful DISABLE
 
-    if not is_after_cutoff:
+    # First check: Is it bedtime hours (20:00-06:59)?
+    if current_hour >= BEDTIME_HOUR or current_hour < MORNING_HOUR:
+        # Bedtime hours: Internet must be OFF (Rule Enabled)
+        intended_action = "ENABLE"
+        reason = f"Bedtime hours ({BEDTIME_HOUR}:00-{MORNING_HOUR:02d}:00). Current time: {current_hour}:00."
+        # State update is NOT needed during bedtime enforcement
+    elif not is_after_cutoff:
         # Rule: Before cutoff time -> Ensure internet is ON (Rule Disabled)
         intended_action = "DISABLE"
         reason = f"Time ({current_hour}:00) is before cutoff ({cutoff_hour}:00)."
