@@ -49,11 +49,14 @@ CHILDREN_CONFIG = [
         "name": "Daniel",
         "todoist_section_id": config.TODOIST_DANIEL_SECTION_ID,
         "sophos_rule_name": config.SOPHOS_DANIEL_RULE_NAME,
+        "auto_disable": True,  # Allow auto-disable (Internet ON) for Daniel
     },
     {
         "name": "Sophie",
         "todoist_section_id": config.TODOIST_SOPHIE_SECTION_ID,
         "sophos_rule_name": config.SOPHOS_SOPHIE_RULE_NAME,
+        # Suppress auto-disable (Internet ON) for Sophie; requires manual verification
+        "auto_disable": False,
     },
 ]
 
@@ -231,6 +234,7 @@ def process_child(child_config: Dict[str, Any], time_status: Dict[str, Any], ser
     child_name = child_config["name"]
     section_id = child_config["todoist_section_id"]
     rule_name = child_config["sophos_rule_name"]
+    auto_disable = child_config.get("auto_disable", True)
     is_after_cutoff = time_status["is_after_cutoff"]
     current_hour = time_status["current_hour"]
     cutoff_hour = time_status["cutoff_hour"]
@@ -321,16 +325,24 @@ def process_child(child_config: Dict[str, Any], time_status: Dict[str, Any], ser
     logger.log(log_level, "Final Intention for '%s': %s rule '%s'. Reason: %s",
                child_name, intended_action, rule_name, reason)
 
-    # --- Apply the Determined Firewall Action ---
-    # Pass the reason to apply_firewall_action purely for consolidated logging context there.
-    # The decision to update state is handled *after* this call returns.
-    action_successful = apply_firewall_action(
-        sophos_client=sophos_client,
-        child_name=child_name,
-        rule_name=rule_name,
-        intended_action=intended_action,
-        reason_for_action=reason # Pass reason for richer logging within the function
-    )
+    # If auto-disable is suppressed for this child, skip applying any DISABLE actions
+    if intended_action == "DISABLE" and not auto_disable:
+        logger.info(
+            "Auto-disable suppressed for '%s'. Skipping DISABLE of rule '%s'. Manual verification required.",
+            child_name, rule_name
+        )
+        action_successful = False  # Ensure no state update is attempted
+    else:
+        # --- Apply the Determined Firewall Action ---
+        # Pass the reason to apply_firewall_action purely for consolidated logging context there.
+        # The decision to update state is handled *after* this call returns.
+        action_successful = apply_firewall_action(
+            sophos_client=sophos_client,
+            child_name=child_name,
+            rule_name=rule_name,
+            intended_action=intended_action,
+            reason_for_action=reason # Pass reason for richer logging within the function
+        )
 
     # --- Update State Manager (Only if Applicable) ---
     # Conditions: Sophos action succeeded, AND the action was DISABLE, AND the reason was chore completion
@@ -346,7 +358,14 @@ def process_child(child_config: Dict[str, Any], time_status: Dict[str, Any], ser
          # Log for clarity when rule is disabled but state isn't updated (e.g., before cutoff)
          logger.debug("Rule for '%s' was disabled, but state update was not required (Reason: %s).", child_name, reason)
     elif not action_successful:
-         logger.error("Skipping potential state update for '%s' because the Sophos action failed.", child_name)
+         # Avoid treating suppressed actions as failures in logs
+         if intended_action == "DISABLE" and not auto_disable:
+             logger.info(
+                 "State update not applicable for '%s' because auto-disable is suppressed.",
+                 child_name
+             )
+         else:
+             logger.error("Skipping potential state update for '%s' because the Sophos action failed.", child_name)
 
 
 def apply_firewall_action(
