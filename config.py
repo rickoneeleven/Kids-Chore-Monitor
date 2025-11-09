@@ -35,6 +35,15 @@ SOPHOS_DANIEL_RULE_NAME = os.getenv("SOPHOS_DANIEL_RULE_NAME")
 # Required: The exact name of the Sophos Firewall rule controlling Sophie's internet access.
 SOPHOS_SOPHIE_RULE_NAME = os.getenv("SOPHOS_SOPHIE_RULE_NAME")
 
+# Optional: Name of Sophie's manual allow rule that should be disabled daily at a fixed time
+SOPHOS_SOPHIE_MANUAL_ALLOW_RULE_NAME = os.getenv("SOPHOS_SOPHIE_MANUAL_ALLOW_RULE_NAME")
+
+# Optional: Time of day to disable Sophie's manual allow rule, format HH:MM (24-hour)
+# Default: 19:30
+_sophie_manual_disable_time = os.getenv("SOPHOS_SOPHIE_MANUAL_ALLOW_DISABLE_TIME", "19:30")
+# Expose canonical string value
+SOPHOS_SOPHIE_MANUAL_ALLOW_DISABLE_TIME = _sophie_manual_disable_time
+
 # --- Operational Parameters (with defaults) ---
 # Timezone for determining "today" and the cutoff time. Uses pytz database names.
 # Default: 'Europe/London'
@@ -94,6 +103,8 @@ def print_config_summary():
     print(f"  TODOIST_SOPHIE_SECTION_ID: {TODOIST_SOPHIE_SECTION_ID}")
     print(f"  SOPHOS_DANIEL_RULE_NAME: {SOPHOS_DANIEL_RULE_NAME}")
     print(f"  SOPHOS_SOPHIE_RULE_NAME: {SOPHOS_SOPHIE_RULE_NAME}")
+    print(f"  SOPHOS_SOPHIE_MANUAL_ALLOW_RULE_NAME: {SOPHOS_SOPHIE_MANUAL_ALLOW_RULE_NAME if SOPHOS_SOPHIE_MANUAL_ALLOW_RULE_NAME else 'Not Set'}")
+    print(f"  SOPHOS_SOPHIE_MANUAL_ALLOW_DISABLE_TIME: {_sophie_manual_disable_time}")
     print(f"  TIMEZONE: {TIMEZONE}")
     print(f"  CUTOFF_HOUR: {CUTOFF_HOUR}")
     print(f"  LOG_FILE_PATH: {LOG_FILE_PATH}")

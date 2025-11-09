@@ -165,3 +165,33 @@ class StateManager:
                     child_name, today_str, self._state.get(normalized_child_name))
         self._state[normalized_child_name] = today_str
         logger.debug("Current in-memory state after update: %s", self._state)
+
+    def has_action_run_today(self, action_key: str, today_str: str) -> bool:
+        """
+        Returns True if a named action has been recorded as completed for today.
+
+        Action flags are stored under the top-level key 'actions' as a mapping
+        from action_key to ISO date string.
+        """
+        if not action_key or not today_str:
+            logger.warning("has_action_run_today called with empty action_key or today_str. Returning False.")
+            return False
+        actions = self._state.get("actions")
+        if not isinstance(actions, dict):
+            return False
+        stored_date = actions.get(action_key)
+        result = stored_date == today_str
+        logger.debug("Checking action '%s' for '%s': stored='%s' -> %s", action_key, today_str, stored_date, result)
+        return result
+
+    def mark_action_run_today(self, action_key: str, today_str: str) -> None:
+        """
+        Marks a named action as completed for today. Does not persist to disk; call save_state().
+        """
+        if not action_key or not today_str:
+            logger.warning("mark_action_run_today called with empty action_key or today_str. No state updated.")
+            return
+        if not isinstance(self._state.get("actions"), dict):
+            self._state["actions"] = {}
+        self._state["actions"][action_key] = today_str
+        logger.info("Marked action '%s' as run for '%s'", action_key, today_str)

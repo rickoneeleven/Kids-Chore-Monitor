@@ -473,6 +473,23 @@ def run_chore_check(logger: logging.Logger):
         logger.info("="*20 + " Chore Check Run Failed (Time Check) " + "="*20)
         return
 
+    # --- Scheduled Actions (independent of chore logic) ---
+    try:
+        from scheduled_actions import ScheduledRuleEnforcer
+        enforcer = ScheduledRuleEnforcer(
+            sophos_client=sophos_client,
+            state_manager=state_manager,
+            timezone_str=config.TIMEZONE,
+        )
+        # Disable Sophie's manual allow rule once per day at configured time if configured
+        if getattr(config, 'SOPHOS_SOPHIE_MANUAL_ALLOW_RULE_NAME', None):
+            enforcer.enforce_daily_disable(
+                rule_name=config.SOPHOS_SOPHIE_MANUAL_ALLOW_RULE_NAME,
+                at_time_str=getattr(config, 'SOPHOS_SOPHIE_MANUAL_ALLOW_DISABLE_TIME', '19:30'),
+            )
+    except Exception as e:
+        logger.error("Scheduled actions execution failed: %s", e, exc_info=True)
+
     # --- Process Each Child ---
     logger.info("Processing children configurations...")
     for child_config in CHILDREN_CONFIG:

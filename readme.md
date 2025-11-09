@@ -1,30 +1,40 @@
 # Kids Chore Monitor
+DATETIME of last agent review: 09/11/2025 10:11
 
 ## Overview
 
 Kids Chore Monitor is a Python application designed to automate internet access control for children based on their chore completion status in Todoist. It integrates with the Todoist API to monitor task completion within specific project sections and interacts with the Sophos Firewall (XG/SFOS) API to enable or disable corresponding firewall rules.
 
+In addition to chore-based checks, the system enforces a strict bedtime window where internet access is disabled regardless of chore status.
+
 The core logic works as follows:
-1.  Checks the current time against a configurable daily `CUTOFF_HOUR`.
-2.  **Before the cutoff time:** Ensures the child's internet access rule is **disabled** (allowing internet access), regardless of chore status. This provides a grace period each morning.
-3.  **After the cutoff time:**
-    *   Checks if the child's chores for the current day have already been marked as completed in a local state file (`daily_completion_state.json`). If so, the internet rule remains disabled (access allowed).
-    *   If not marked as done in the state file, it queries the Todoist API for the child's designated section to see if all tasks due today (or overdue) are complete.
-    *   If tasks are incomplete, the corresponding Sophos Firewall rule is **enabled** (blocking internet access).
-    *   If tasks are complete, the Sophos Firewall rule is **disabled** (allowing internet access), and the local state file is updated to mark the child's chores as done for the day.
+1.  Determine the current time in the configured `TIMEZONE` and evaluate one of three windows:
+    *   Bedtime hours: 20:00 to 06:59. Always set the rule to **enabled** (Internet OFF).
+    *   Morning free time: 07:00 to (`CUTOFF_HOUR` - 1). Set the rule to **disabled** (Internet ON), independent of chores.
+    *   After cutoff: `current_hour >= CUTOFF_HOUR`.
+2.  After cutoff time:
+    *   If the child is already marked as done for today in `daily_completion_state.json`, set the rule to **disabled** (Internet ON).
+    *   Otherwise, query Todoist for tasks due today or overdue in the child's section.
+        - If tasks are incomplete, set the rule to **enabled** (Internet OFF).
+        - If all tasks are complete, set the rule to **disabled** (Internet ON) and mark the child as done for today in the state file.
 
 This system relies on API keys, specific IDs from Todoist, and rule names from Sophos, all configured via an `.env` file. Detailed logging is implemented for monitoring and troubleshooting.
 
 ## Features
 
-*   Automated checking of chore completion status in designated Todoist sections.
+*   Bedtime enforcement: Internet OFF between 20:00 and 07:00.
+*   Morning free time window until the configured `CUTOFF_HOUR`.
+*   Automated checking of chore completion status in designated Todoist sections after cutoff.
 *   Automatic enabling/disabling of specific Sophos Firewall rules.
-*   Configurable daily cutoff time to determine when chore checks impact internet access.
+*   Per-child control for auto-disable behavior (e.g., disable is suppressed for Sophie).
 *   Daily state persistence (`daily_completion_state.json`) to avoid redundant API calls and correctly handle checks after the cutoff.
-*   Configuration managed securely via a `.env` file.
-*   Detailed logging for operational monitoring and debugging (`chore_monitor.log` and `cron.log`).
-*   Helper script (`get_todoist_ids.py`) to easily find required Todoist Project/Section IDs.
-*   Test script (`test_sophos.py`) for verifying Sophos API connectivity and rule manipulation (use with caution!).
+*   Configuration managed via a `.env` file.
+*   Logging to console by default; when scheduled via cron, redirect output to `cron.log` as in the example below.
+*   Helper script (`get_todoist_ids.py`) to find required Todoist Project/Section IDs.
+*   Test script (`test_sophos.py`) for verifying Sophos API connectivity and rule manipulation (use with caution).
+
+### Optional daily manual rule disable
+- You can configure a separate manual allow rule for Sophie that is automatically disabled once per day at a fixed time (default 19:30), independent of chore checks. Set `SOPHOS_SOPHIE_MANUAL_ALLOW_RULE_NAME` and optionally `SOPHOS_SOPHIE_MANUAL_ALLOW_DISABLE_TIME` in `.env` to enable this.
 
 ## How it Works (Workflow Summary)
 
@@ -162,14 +172,16 @@ Cron will now execute the script, and any standard output or errors generated du
 *   `state_manager.py`: Manages loading, saving, and checking the daily completion state from `daily_completion_state.json`.
 *   `get_todoist_ids.py`: Utility script to find necessary Todoist project/section IDs.
 *   `test_sophos.py`: Utility script to test Sophos connection and rule toggling (use cautiously).
+*   `tests/`: Unit tests for time windows and auto-disable suppression (`test_time_logic.py`, `test_auto_disable_suppression.py`).
+*   `run_tests.py`: Simple runner to execute the test suite.
 *   `.env.example`: Template for the required environment variables.
 *   `requirements.txt`: List of Python dependencies.
-*   `todo.txt`: Development notes and future tasks.
 
 ## Logging
 
-*   **Application Log:** `chore_monitor.log` (or path specified in `.env`). Contains detailed operational logs from the Python script (initialization, API calls, decisions, errors). Check this file first for debugging application logic.
-*   **Cron Log:** `cron.log` (in the project root, if using the example crontab entry). Captures standard output and standard error from the `cron` execution itself. Useful for checking if the script is being triggered correctly by cron and catching path or permission errors related to the cron setup.
+*   **Console output:** By default the application logs to stdout with structured messages.
+*   **Cron log:** Use shell redirection in your crontab to capture output, e.g. `>> cron.log 2>&1` as shown above.
+*   **File logging (optional):** A `LOG_FILE_PATH` is defined in `.env`, but file logging is not enabled by default in `main.py`. You can add a `logging.FileHandler` if you prefer a dedicated application log file.
 
 ## State Management
 
